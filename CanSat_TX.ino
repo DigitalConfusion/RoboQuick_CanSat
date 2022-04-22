@@ -8,14 +8,12 @@
 #include <Adafruit_BMP280.h>
 #include <Adafruit_PM25AQI.h>
 #include <SparkFun_SCD30_Arduino_Library.h>
-#include <Adafruit_INA219.h>
 #include <TeensyThreads.h>
-//#include <TimeLib.h>
-#include <NMEAGPS.h>
+#include <TinyGPSPlus.h>
 
 /* ---------------- Lora ----------------- */
-
 // LoRa pins
+// Don't change these
 const int csPin = 24;
 const int resetPin = 26;
 const int irqPin = 25;
@@ -24,32 +22,21 @@ const int irqPin = 25;
 const long freq = 4337E5; // 433.7 MHz
 
 /* ----------------- GPS ------------------*/
-
 // Gps object
-NMEAGPS gps;
-gps_fix fix;
-#define gpsPort Serial1
+TinyGPSPlus gps;
 
 const unsigned char UBLOX_INIT[] PROGMEM = {
-    // Rate (pick one)
-    // 0xB5,0x62,0x06,0x08,0x06,0x00,0x64,0x00,0x01,0x00,0x01,0x00,0x7A,0x12, //(10Hz)
     0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, 0xC8, 0x00, 0x01, 0x00, 0x01, 0x00, 0xDE, 0x6A, //(5Hz)
                                                                                         // 0xB5,0x62,0x06,0x08,0x06,0x00,0xE8,0x03,0x01,0x00,0x01,0x00,0x01,0x39 //(1Hz)
 };
 
-// Variables for getting up to date info from GPS
-unsigned long currentMillisGps = 0;
-unsigned long previousMillisGps = 0;
-const long intervalGps = 1000; // 1 second
-
 /* --------------- Sensors ---------------- */
-
 // Sensor power pins
-const int sensor_board_power = 22; // Set correct pin!
+const int sensor_board_power = 22;
 
 // Mics2714 variables
 const int mics_input = 21;
-const int mics_power = 20; // Set correct pin!
+const int mics_power = 20;
 float no2_ppm;
 
 // SGP30 object
@@ -92,7 +79,6 @@ float temp_bmp = 0;
 float pressure = 0;
 
 /* ---------------- Miscellaneous variables ----------------- */
-
 // Variables fot timing
 unsigned long currentMillis = 0;
 unsigned long previousMillis = 0;
@@ -106,7 +92,6 @@ int analog_steps;
 const int offset = 3;
 
 /* ---------------------- Functions  -------------------------*/
-
 // Converts relative humidity to absolute humidity
 uint32_t getAbsoluteHumidity(float temperature, float humidity)
 {
@@ -116,28 +101,47 @@ uint32_t getAbsoluteHumidity(float temperature, float humidity)
   return absoluteHumidityScaled;
 }
 
+// Function that will run in the background using a thread and update gps information
+void get_gps_data()
+{
+  if (digitalRead(sensor_board_power) == HIGH)
+  {
+    while (Serial1.available())
+    {
+      gps.encode(Serial1.read());
+    }
+  }
+}
+
+// Function that turns on the sensor board and starts up the gps, scd30, pmsa003i, sgp30, it also turn on the mics2714
 void turn_on_all_sensors()
 {
   // Turn on sensor board
   digitalWrite(sensor_board_power, HIGH);
-  Serial.println("Sensor board power is ON. Waiting 1 second for sensors to turn on!");
-  delay(1000);
+  Serial.println("Sensor board power is ON. Waiting 2 second for sensors to turn on!");
+  delay(2000);
 
   // Begin communication with SCD30 sensor
   while (!scd.begin(Wire1))
   {
-    Serial.println("SCD30 not found");
-    delay(100);
+    Serial.println("SCD30 not found. This warning should only show up once!");
+    delay(1000);
   }
   Serial.println("SCD30 started");
+  LoRa.beginPacket();
+  LoRa.print("SCD30 started");
+  LoRa.endPacket();
 
   // Begin communication with PMSA003I sensor
   while (!pms.begin_I2C(&Wire2))
   {
-    Serial.println("PMS not found");
-    delay(100);
+    Serial.println("PMS not found. It usually takes a few tries to turn on!");
+    delay(1000);
   }
   Serial.println("PMS started");
+  LoRa.beginPacket();
+  LoRa.print("PMS started");
+  LoRa.endPacket();
 
   // Begin communication with SGP30 sensor
   while (!sgp.begin(&Wire2))
@@ -145,33 +149,46 @@ void turn_on_all_sensors()
     Serial.println("SGP not found");
     delay(100);
   }
+  LoRa.beginPacket();
+  LoRa.print("SGP started");
+  LoRa.endPacket();
   // Loads sensor's baseline from EEPROM
-  // TODO: Check if calibration is needed
   /*
-  int e_base = 0;
-  int t_base = 0;
-  EEPROM.get(0, e_base);
-  EEPROM.get(100, t_base);
-  sgp.setIAQBaseline(e_base, t_base);
+    int e_base = 0;
+    int t_base = 0;
+    EEPROM.get(0, e_base);
+    EEPROM.get(100, t_base);
+    sgp.setIAQBaseline(e_base, t_base);
   */
   Serial.println("SGP started");
 
   // Turn on Mics-2714
   digitalWrite(mics_power, LOW);
   Serial.println("Mics-2714 turned on");
+  LoRa.beginPacket();
+  LoRa.print("MICS started");
+  LoRa.endPacket();
 
   // Begin communication with the GPS module
-  gpsPort.begin(9600);
+  Serial1.begin(9600);
   // send configuration data in UBX protocol
   for (unsigned int i = 0; i < sizeof(UBLOX_INIT); i++)
   {
-    gpsPort.write(pgm_read_byte(UBLOX_INIT + i));
+    Serial1.write(pgm_read_byte(UBLOX_INIT + i));
   }
+  // Starts a thread to update gps information as soon as new info is available
+  threads.addThread(get_gps_data);
+  LoRa.beginPacket();
+  LoRa.print("GPS started");
+  LoRa.endPacket();
+
   Serial.println("GPS, SCD30, PMSA003I, Mics-2714 and SGP30 sensors are working!");
-  delay(1000);
+  LoRa.beginPacket();
+  LoRa.print("GPS, SCD30, PMSA003I, Mics-2714 and SGP30 sensors are working!");
+  LoRa.endPacket();
 }
 
-/* ---------------------- Main code -----------------------*/
+/* ---------------------- Setup -----------------------*/
 void setup()
 {
   // Set sensor power pins to output
@@ -180,7 +197,7 @@ void setup()
 
   // Set input pin from mics to input mode
   pinMode(mics_input, INPUT);
-  // Turn on mics for testing purposes
+  // At the start set mics to off
   digitalWrite(mics_power, HIGH);
 
   // Begin serial and i2c comunication.
@@ -207,10 +224,10 @@ void setup()
   }
   // Settings for LoRa
   LoRa.setTxPower(20);
-  LoRa.setSpreadingFactor(8);
-  LoRa.setSignalBandwidth(62.5E3);
-  LoRa.enableCrc();
-  LoRa.setGain(6);
+  LoRa.setSpreadingFactor(10);
+  // LoRa.setSignalBandwidth(62.5E3);
+  // LoRa.enableCrc();
+  // LoRa.setGain(6);
   Serial.println("LoRa started");
 
   // Starts BMP280 sensor
@@ -226,17 +243,12 @@ void setup()
   // Turn on all sensors for testing purposes
   turn_on_all_sensors();
 
-  // Delay to make sure everything has turned on
-  delay(1000);
   Serial.println("Setup done");
 }
 
-// Loops
+/*------------------- Loop -------------------------*/
 void loop()
 {
-  // Checks if a message has been received
-  // onReceive(LoRa.parsePacket());
-
   // Get time since turned on in miliseconds
   currentMillis = millis();
 
@@ -304,53 +316,23 @@ void loop()
       // Calculates no2 concentration in ppm, using graph from datasheet
       no2_ppm = ((5 - mics_voltage) / mics_voltage) / 6.667;
     }
-
-    if (digitalRead(sensor_board_power) == HIGH)
-    {
-      while (gps.available(gpsPort))
-      {
-        fix = gps.read();
-      }
-    }
   }
-  // Checks if a message has been received, before sending data
-  // onReceive(LoRa.parsePacket());
 
   // Sends data to LoRa radio module
   LoRa.beginPacket();
-  // Send location
-  if (fix.valid.location)
-  {
-    LoRa.print(fix.latitude(), 6);
-    LoRa.print(",");
-    LoRa.print(fix.longitude(), 6);
-  }
-  else
-  {
-    LoRa.print(0);
-    LoRa.print(",");
-    LoRa.print(0);
-  }
+  LoRa.print(gps.location.lat(), 6);
   LoRa.print(",");
-  // Send altitude
-  if (fix.valid.altitude)
-  {
-    LoRa.print(fix.altitude());
-  }
-  else
-  {
-    LoRa.print(0);
-  }
+  LoRa.print(gps.location.lng(), 6);
   LoRa.print(",");
-  // Send time
-  if (fix.valid.time)
-  {
-    LoRa.print((NeoGPS::clock_t) fix.dateTime);
-  }
-  else
-  {
-    LoRa.print(0);
-  }
+  LoRa.print(gps.altitude.meters());
+  LoRa.print(",");
+  LoRa.print(gps.satellites.value());
+  LoRa.print(",");
+  LoRa.print(gps.time.hour());
+  LoRa.print(":");
+  LoRa.print(gps.time.minute());
+  LoRa.print(":");
+  LoRa.print(gps.time.second());
   LoRa.print(",");
   LoRa.print(temp_bmp);
   LoRa.print(",");
@@ -372,43 +354,25 @@ void loop()
   LoRa.print(",");
   LoRa.print(co2);
   LoRa.print(",");
-  LoRa.println(no2_ppm);
+  LoRa.print(no2_ppm);
+  LoRa.print(",");
+  LoRa.println(analogRead(mics_input));
   LoRa.endPacket();
 
-  // Print all data to Serial console
-  // Send location
-  if (fix.valid.location)
-  {
-    Serial.print(fix.latitude(), 6);
-    Serial.print(",");
-    Serial.print(fix.longitude(), 6);
-  }
-  else
-  {
-    Serial.print(0);
-    Serial.print(",");
-    Serial.print(0);
-  }
+  // Print all data to the serial console
+  Serial.print(gps.location.lat(), 6);
   Serial.print(",");
-  // Send altitude
-  if (fix.valid.altitude)
-  {
-    Serial.print(fix.altitude());
-  }
-  else
-  {
-    Serial.print(0);
-  }
+  Serial.print(gps.location.lng(), 6);
   Serial.print(",");
-  // Send time
-  if (fix.valid.time)
-  {
-    Serial.print((NeoGPS::clock_t) fix.dateTime);
-  }
-  else
-  {
-    Serial.print(0);
-  }
+  Serial.print(gps.altitude.meters());
+  Serial.print(",");
+  Serial.print(gps.satellites.value());
+  Serial.print(",");
+  Serial.print(gps.time.hour());
+  Serial.print(":");
+  Serial.print(gps.time.minute());
+  Serial.print(":");
+  Serial.print(gps.time.second());
   Serial.print(",");
   Serial.print(temp_bmp);
   Serial.print(",");
@@ -432,5 +396,7 @@ void loop()
   Serial.print(",");
   Serial.print(co2);
   Serial.print(",");
-  Serial.println(no2_ppm);
+  Serial.print(no2_ppm);
+  Serial.print(",");
+  Serial.println(analogRead(mics_input));
 }
