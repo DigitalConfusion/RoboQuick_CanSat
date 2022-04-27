@@ -11,6 +11,7 @@
 #include <TeensyThreads.h>
 #include <TinyGPSPlus.h>
 #include <SD.h>
+#include <Time.h>
 
 /* ---------------- Lora ----------------- */
 // LoRa pins
@@ -82,6 +83,16 @@ Adafruit_BMP280 bmp;
 float temp_bmp = 0;
 float pressure = 0;
 
+/* ----------------------- Time ----------------------------- */
+// Time zone offset
+const int offset = 3;
+
+// Variables to store time
+int hour, minute, second;
+
+// Variable to check if correct time has been set to internal clock from GPS
+bool time_is_set = false;
+
 /* ---------------- Miscellaneous variables ----------------- */
 // Variables fot timing
 unsigned long currentMillis = 0;
@@ -91,9 +102,6 @@ const long interval = 1000; // 1 second
 // How many steps are in analogRead, it differs from original 1024,
 // because later on resolution gets changed from 8 to 12 bits
 int analog_steps;
-
-// Time zone offset
-const int offset = 3;
 
 /* ---------------------- Functions  -------------------------*/
 // Converts relative humidity to absolute humidity
@@ -175,13 +183,13 @@ void turn_on_all_sensors()
 
   // Begin communication with the GPS module
   Serial1.begin(9600);
-  // send configuration data in UBX protocol
+  // Send configuration data in UBX protocol
   for (unsigned int i = 0; i < sizeof(UBLOX_INIT); i++)
   {
     Serial1.write(pgm_read_byte(UBLOX_INIT + i));
   }
   // Starts a thread to update gps information as soon as new info is available
-  threads.addThread(get_gps_data);
+  // threads.addThread(get_gps_data);
   LoRa.beginPacket();
   LoRa.print("GPS started");
   LoRa.endPacket();
@@ -196,11 +204,11 @@ void write_to_sd()
 {
   String dataString = "";
 
-  dataString += String(gps.time.hour());
+  dataString += String(hour);
   dataString += String(":");
-  dataString += String(gps.time.minute());
+  dataString += String(minute);
   dataString += String(":");
-  dataString += String(gps.time.second());
+  dataString += String(second);
   dataString += String(",");
   dataString += String(gps.location.lat());
   dataString += String(",");
@@ -340,9 +348,19 @@ void setup()
 /*------------------- Loop -------------------------*/
 void loop()
 {
+  // Check if new GPS data is available
+  get_gps_data();
+  
+  if (gps.time.isValid() && !time_is_set)
+  {
+    hour = gps.time.hour();
+    minute = gps.time.minute();
+    second = gps.time.second();
+    time_is_set == true;
+  }
   // Get time since turned on in miliseconds
   currentMillis = millis();
-
+  
   // Run only if interval of time has passed
   if (currentMillis - previousMillis >= interval)
   {
@@ -407,90 +425,90 @@ void loop()
       // Calculates no2 concentration in ppm, using graph from datasheet
       no2_ppm = ((5 - mics_voltage) / mics_voltage) / 6.667;
     }
-  }
 
-  // Sends data to LoRa radio module
-  LoRa.beginPacket();
-  LoRa.print(gps.location.lat(), 6);
-  LoRa.print(",");
-  LoRa.print(gps.location.lng(), 6);
-  LoRa.print(",");
-  LoRa.print(gps.altitude.meters());
-  LoRa.print(",");
-  LoRa.print(gps.satellites.value());
-  LoRa.print(",");
-  LoRa.print(gps.time.hour());
-  LoRa.print(":");
-  LoRa.print(gps.time.minute());
-  LoRa.print(":");
-  LoRa.print(gps.time.second());
-  LoRa.print(",");
-  LoRa.print(temp_bmp);
-  LoRa.print(",");
-  LoRa.print(temp_thermo);
-  LoRa.print(",");
-  LoRa.print(temp_scd30);
-  LoRa.print(",");
-  LoRa.print(humidity_scd30);
-  LoRa.print(",");
-  LoRa.print(eco2);
-  LoRa.print(",");
-  LoRa.print(tvoc);
-  LoRa.print(",");
-  LoRa.print(pm10_std);
-  LoRa.print(",");
-  LoRa.print(pm25_std);
-  LoRa.print(",");
-  LoRa.print(pm100_std);
-  LoRa.print(",");
-  LoRa.print(co2);
-  LoRa.print(",");
-  LoRa.print(no2_ppm);
-  LoRa.print(",");
-  LoRa.println(analogRead(mics_input));
-  LoRa.endPacket();
-
-  // Print all data to the serial console
-  Serial.print(gps.location.lat(), 6);
-  Serial.print(",");
-  Serial.print(gps.location.lng(), 6);
-  Serial.print(",");
-  Serial.print(gps.altitude.meters());
-  Serial.print(",");
-  Serial.print(gps.satellites.value());
-  Serial.print(",");
-  Serial.print(gps.time.hour());
-  Serial.print(":");
-  Serial.print(gps.time.minute());
-  Serial.print(":");
-  Serial.print(gps.time.second());
-  Serial.print(",");
-  Serial.print(temp_bmp);
-  Serial.print(",");
-  Serial.print(temp_thermo);
-  Serial.print(",");
-  Serial.print(temp_scd30);
-  Serial.print(",");
-  Serial.print(pressure);
-  Serial.print(",");
-  Serial.print(humidity_scd30);
-  Serial.print(",");
-  Serial.print(eco2);
-  Serial.print(",");
-  Serial.print(tvoc);
-  Serial.print(",");
-  Serial.print(pm10_std);
-  Serial.print(",");
-  Serial.print(pm25_std);
-  Serial.print(",");
-  Serial.print(pm100_std);
-  Serial.print(",");
-  Serial.print(co2);
-  Serial.print(",");
-  Serial.print(no2_ppm);
-  Serial.print(",");
-  Serial.println(analogRead(mics_input));
+    // Sends data to LoRa radio module
+    LoRa.beginPacket();
+    LoRa.print(hour);
+    LoRa.print(":");
+    LoRa.print(minute);
+    LoRa.print(":");
+    LoRa.print(second);
+    LoRa.print(",");
+    LoRa.print(gps.location.lat(), 6);
+    LoRa.print(",");
+    LoRa.print(gps.location.lng(), 6);
+    LoRa.print(",");
+    LoRa.print(gps.altitude.meters());
+    LoRa.print(",");
+    LoRa.print(gps.satellites.value());
+    LoRa.print(",");
+    LoRa.print(temp_bmp);
+    LoRa.print(",");
+    LoRa.print(temp_thermo);
+    LoRa.print(",");
+    LoRa.print(temp_scd30);
+    LoRa.print(",");
+    LoRa.print(humidity_scd30);
+    LoRa.print(",");
+    LoRa.print(eco2);
+    LoRa.print(",");
+    LoRa.print(tvoc);
+    LoRa.print(",");
+    LoRa.print(pm10_std);
+    LoRa.print(",");
+    LoRa.print(pm25_std);
+    LoRa.print(",");
+    LoRa.print(pm100_std);
+    LoRa.print(",");
+    LoRa.print(co2);
+    LoRa.print(",");
+    LoRa.print(no2_ppm);
+    LoRa.print(",");
+    LoRa.println(analogRead(mics_input));
+    LoRa.endPacket();
   
-  // Write data to SD card log file
-  write_to_sd();
+    // Print all data to the serial console
+    Serial.print(hour);
+    Serial.print(":");
+    Serial.print(minute);
+    Serial.print(":");
+    Serial.print(second);
+    Serial.print(",");
+    Serial.print(gps.location.lat(), 6);
+    Serial.print(",");
+    Serial.print(gps.location.lng(), 6);
+    Serial.print(",");
+    Serial.print(gps.altitude.meters());
+    Serial.print(",");
+    Serial.print(gps.satellites.value());
+    Serial.print(",");
+    Serial.print(temp_bmp);
+    Serial.print(",");
+    Serial.print(temp_thermo);
+    Serial.print(",");
+    Serial.print(temp_scd30);
+    Serial.print(",");
+    Serial.print(pressure);
+    Serial.print(",");
+    Serial.print(humidity_scd30);
+    Serial.print(",");
+    Serial.print(eco2);
+    Serial.print(",");
+    Serial.print(tvoc);
+    Serial.print(",");
+    Serial.print(pm10_std);
+    Serial.print(",");
+    Serial.print(pm25_std);
+    Serial.print(",");
+    Serial.print(pm100_std);
+    Serial.print(",");
+    Serial.print(co2);
+    Serial.print(",");
+    Serial.print(no2_ppm);
+    Serial.print(",");
+    Serial.println(analogRead(mics_input));
+    
+    // Write data to SD card log file
+    write_to_sd();
+  }
 }
