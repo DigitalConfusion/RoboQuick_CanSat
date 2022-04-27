@@ -10,6 +10,7 @@
 #include <SparkFun_SCD30_Arduino_Library.h>
 #include <TeensyThreads.h>
 #include <TinyGPSPlus.h>
+#include <SD.h>
 
 /* ---------------- Lora ----------------- */
 // LoRa pins
@@ -30,6 +31,9 @@ const unsigned char UBLOX_INIT[] PROGMEM = {
                                                                                         // 0xB5,0x62,0x06,0x08,0x06,0x00,0xE8,0x03,0x01,0x00,0x01,0x00,0x01,0x39 //(1Hz)
 };
 
+/* --------------- SD Card ---------------- */
+File myFile;
+String file_name;
 /* --------------- Sensors ---------------- */
 // Sensor power pins
 const int sensor_board_power = 22;
@@ -188,6 +192,77 @@ void turn_on_all_sensors()
   LoRa.endPacket();
 }
 
+void write_to_sd()
+{
+  String dataString = "";
+
+  dataString += String(gps.time.hour());
+  dataString += String(":");
+  dataString += String(gps.time.minute());
+  dataString += String(":");
+  dataString += String(gps.time.second());
+  dataString += String(",");
+  dataString += String(gps.location.lat());
+  dataString += String(",");
+  dataString += String(gps.location.lng());
+  dataString += String(",");
+  dataString += String(gps.altitude.meters());
+  dataString += String(",");
+  dataString += String(gps.satellites.value());
+  dataString += String(",");
+  dataString += String(temp_bmp);
+  dataString += String(",");
+  dataString += String(temp_thermo);
+  dataString += String(",");
+  dataString += String(temp_scd30);
+  dataString += String(",");
+  dataString += String(humidity_scd30);
+  dataString += String(",");
+  dataString += String(eco2);
+  dataString += String(",");
+  dataString += String(tvoc);
+  dataString += String(",");
+  dataString += String(pm10_std);
+  dataString += String(",");
+  dataString += String(pm25_std);
+  dataString += String(",");
+  dataString += String(pm100_std);
+  dataString += String(",");
+  dataString += String(co2);
+  dataString += String(",");
+  dataString += String(no2_ppm);
+
+  // Opens a file
+  File myFile = SD.open(file_name, FILE_WRITE);
+
+  // if the file is available, write to it:
+  if (myFile) {
+    myFile.println(dataString);
+    myFile.close();
+  }
+  // if the file isn't open, pop up an error:
+  else {
+    Serial.println("Error opening file");
+  }
+}
+
+
+void write_sd_log_header()
+{
+  String header = "";
+  header = "Time,Lattitude,Longitude,Altitude,Satellites,TempBMP,TempThermoresistor,TempSCD,Humidity,eCO2,TVOC,PM10,PM25,PM100,CO2,NO2"
+  File myFile = SD.open(file_name, FILE_WRITE);
+  // if the file is available, write to it:
+  if (myFile) {
+    myFile.println(dataString);
+    myFile.close();
+  }
+  // if the file isn't open, pop up an error:
+  else {
+    Serial.println("Error opening file");
+  }
+}
+
 /* ---------------------- Setup -----------------------*/
 void setup()
 {
@@ -222,6 +297,7 @@ void setup()
     while (1)
       ;
   }
+  
   // Settings for LoRa
   LoRa.setTxPower(20);
   LoRa.setSpreadingFactor(10);
@@ -230,6 +306,21 @@ void setup()
   // LoRa.setGain(6);
   Serial.println("LoRa started");
 
+  // see if the card is present and initialize it
+  while (!SD.begin(BUILTIN_SDCARD)) {
+    Serial.println("Initializing SD card failed! Trying again!");
+    LoRa.beginPacket();
+    LoRa.print("Initializing SD card failed! Trying again!");
+    LoRa.endPacket();
+    delay(1000);
+  }
+  file_name = "datalog" + String(random(1, 1000)) + ".csv";
+  write_sd_log_header();
+  Serial.println("SD card initialized!");
+  LoRa.beginPacket();
+  LoRa.print("SD card initialized!");
+  LoRa.endPacket();
+  
   // Starts BMP280 sensor
   bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
   // Settings for BMP280 sensor
@@ -307,7 +398,7 @@ void loop()
     {
       // Gets average voltage from mics input
       float mics_voltage = 0.0;
-      int samples = 100;
+      int samples = 5;
       for (int i = 0; i < samples; i++)
       {
         mics_voltage += (analogRead(mics_input) / analog_steps) * 3.3;
@@ -399,4 +490,7 @@ void loop()
   Serial.print(no2_ppm);
   Serial.print(",");
   Serial.println(analogRead(mics_input));
+  
+  // Write data to SD card log file
+  write_to_sd();
 }
