@@ -12,6 +12,7 @@
 #include <TinyGPSPlus.h>
 #include <SD.h>
 #include <Time.h>
+#include <MPU9250.h>
 
 /* ---------------- Lora ----------------- */
 // LoRa pins
@@ -27,6 +28,7 @@ const long freq = 4337E5; // 433.7 MHz
 // Gps object
 TinyGPSPlus gps;
 
+// Configuration for GPS to update at 5 times a second
 const unsigned char UBLOX_INIT[] PROGMEM = {
     0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, 0xC8, 0x00, 0x01, 0x00, 0x01, 0x00, 0xDE, 0x6A, //(5Hz)
                                                                                         // 0xB5,0x62,0x06,0x08,0x06,0x00,0xE8,0x03,0x01,0x00,0x01,0x00,0x01,0x39 //(1Hz)
@@ -35,6 +37,7 @@ const unsigned char UBLOX_INIT[] PROGMEM = {
 /* --------------- SD Card ---------------- */
 File myFile;
 String file_name;
+
 /* --------------- Sensors ---------------- */
 // Sensor power pins
 const int sensor_board_power = 22;
@@ -82,6 +85,8 @@ Adafruit_BMP280 bmp;
 // Variables for BMP280
 float temp_bmp = 0;
 float pressure = 0;
+float altitude = 0;
+const float ambient_pressure = 1022.6;
 
 /* ----------------------- Time ----------------------------- */
 // Time zone offset
@@ -102,6 +107,9 @@ const long interval = 1000; // 1 second
 // How many steps are in analogRead, it differs from original 1024,
 // because later on resolution gets changed from 8 to 12 bits
 int analog_steps;
+
+// Beeper power pin
+const int beeper_power = 30; // Change this to correct pin!!!!!
 
 /* ---------------------- Functions  -------------------------*/
 // Converts relative humidity to absolute humidity
@@ -200,6 +208,17 @@ void turn_on_all_sensors()
   LoRa.endPacket();
 }
 
+// Turns off all sensors and gps
+void turn_of_all_sensors()
+{
+  digitalWrite(sensor_board_power, LOW);
+  digitalWrite(mics_power, HIGH);
+  Serial.println("Sensors and gps turned off!")
+  LoRa.beginPacket();
+  LoRa.print("Sensors and gps turned off!");
+  LoRa.endPacket();
+}
+
 void write_to_sd()
 {
   String dataString = "";
@@ -217,6 +236,8 @@ void write_to_sd()
   dataString += String(gps.altitude.meters());
   dataString += String(",");
   dataString += String(gps.satellites.value());
+  dataString += String(",");
+  dataString += String(altitude);
   dataString += String(",");
   dataString += String(temp_bmp);
   dataString += String(",");
@@ -258,7 +279,7 @@ void write_to_sd()
 void write_sd_log_header()
 {
   String header = "";
-  header = "Time,Lattitude,Longitude,Altitude,Satellites,TempBMP,TempThermoresistor,TempSCD,Humidity,eCO2,TVOC,PM10,PM25,PM100,CO2,NO2"
+  header = "Time,Lattitude,Longitude,GPSAltitude,Satellites,AltitudeBMP,TempBMP,TempThermoresistor,TempSCD,Humidity,eCO2,TVOC,PM10,PM25,PM100,CO2,NO2"
   File myFile = SD.open(file_name, FILE_WRITE);
   // if the file is available, write to it:
   if (myFile) {
@@ -351,7 +372,7 @@ void loop()
   // Check if new GPS data is available
   get_gps_data();
   
-  if (gps.time.isValid() && !time_is_set)
+  if (gps.time.isValid()/* && !time_is_set*/)
   {
     hour = gps.time.hour();
     minute = gps.time.minute();
@@ -380,6 +401,7 @@ void loop()
     // Get data from BMP280 sensor
     temp_bmp = bmp.readTemperature();
     pressure = bmp.readPressure();
+    altitude = bmp.readAltitude(ambient_pressure);
 
     // Get temperature from NTC thermoresistor
     ntc_analog_value = (VCC / analog_steps) * analogRead(A10); // Analog reading from NTC
@@ -442,6 +464,8 @@ void loop()
     LoRa.print(",");
     LoRa.print(gps.satellites.value());
     LoRa.print(",");
+    LoRa.print(altitude);
+    LoRa.print(",");
     LoRa.print(temp_bmp);
     LoRa.print(",");
     LoRa.print(temp_thermo);
@@ -481,6 +505,8 @@ void loop()
     Serial.print(gps.altitude.meters());
     Serial.print(",");
     Serial.print(gps.satellites.value());
+    Serial.print(",");
+    Serial.print(altitude);
     Serial.print(",");
     Serial.print(temp_bmp);
     Serial.print(",");
