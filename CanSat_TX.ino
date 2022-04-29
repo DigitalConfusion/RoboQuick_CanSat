@@ -12,7 +12,6 @@
 #include <TinyGPSPlus.h>
 #include <SD.h>
 #include <Time.h>
-#include <MPU9250.h>
 
 /* ---------------- Lora ----------------- */
 // LoRa pins
@@ -86,6 +85,8 @@ Adafruit_BMP280 bmp;
 float temp_bmp = 0;
 float pressure = 0;
 float altitude = 0;
+float highest_altitude = 0;
+unsigned long highest_alt_time = 0;
 const float ambient_pressure = 1022.6;
 
 /* ----------------------- Time ----------------------------- */
@@ -109,7 +110,7 @@ const long interval = 1000; // 1 second
 int analog_steps;
 
 // Beeper power pin
-const int beeper_power = 30; // Change this to correct pin!!!!!
+const int beeper_power = 30; // Change this to correct pin!!!!
 
 /* ---------------------- Functions  -------------------------*/
 // Converts relative humidity to absolute humidity
@@ -121,7 +122,7 @@ uint32_t getAbsoluteHumidity(float temperature, float humidity)
   return absoluteHumidityScaled;
 }
 
-// Function that will run in the background using a thread and update gps information
+// Function that updates gps data
 void get_gps_data()
 {
   if (digitalRead(sensor_board_power) == HIGH)
@@ -133,7 +134,7 @@ void get_gps_data()
   }
 }
 
-// Function that turns on the sensor board and starts up the gps, scd30, pmsa003i, sgp30, it also turn on the mics2714
+// Function that turns on and begins communication with all senors
 void turn_on_all_sensors()
 {
   // Turn on sensor board
@@ -196,8 +197,6 @@ void turn_on_all_sensors()
   {
     Serial1.write(pgm_read_byte(UBLOX_INIT + i));
   }
-  // Starts a thread to update gps information as soon as new info is available
-  // threads.addThread(get_gps_data);
   LoRa.beginPacket();
   LoRa.print("GPS started");
   LoRa.endPacket();
@@ -209,7 +208,7 @@ void turn_on_all_sensors()
 }
 
 // Turns off all sensors and gps
-void turn_of_all_sensors()
+void turn_off_all_sensors()
 {
   digitalWrite(sensor_board_power, LOW);
   digitalWrite(mics_power, HIGH);
@@ -275,7 +274,6 @@ void write_to_sd()
   }
 }
 
-
 void write_sd_log_header()
 {
   String header = "";
@@ -289,6 +287,37 @@ void write_sd_log_header()
   // if the file isn't open, pop up an error:
   else {
     Serial.println("Error opening file");
+  }
+}
+
+// Beeps and sends location, when Cansat has landed
+void recovery_mode()
+{
+  while true
+  {
+    // Beep
+    digitalWrite(beeper_power, HIGH);
+    delay(1000);
+    digitalWrite(beeper_power, LOW);
+    // Transmit location
+    LoRa.beginPacket();
+    LoRa.print(gps.location.lat(), 6);
+    LoRa.print(",");
+    LoRa.print(gps.location.lng(), 6);
+    LoRa.endPacket();
+    delay(5000);
+  }
+}
+
+// Function checks if Cansat has landed and puts cansat in power saving and recovery mode
+void check_if_landed()
+{
+  // Check if altitude has been higher than 300m, that means that launch was successful
+  // then check that Cansat is falling down, and then we can be sure that after 5 minutes
+  // Cansat must have landed and stayed still
+  if (highest_altitude > 400 && altitude < 200 && millis() - highest_alt_time > 300000)
+  {
+    recovery_mode()
   }
 }
 
@@ -355,7 +384,7 @@ void setup()
   // Settings for BMP280 sensor
   bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,   /* Operating Mode. */
                   Adafruit_BMP280::SAMPLING_X2,   /* Temp. oversampling */
-                  Adafruit_BMP280::SAMPLING_X8,   /* Pressure oversampling */
+                  Adafruit_BMP280::SAMPLING_X4,   /* Pressure oversampling */
                   Adafruit_BMP280::FILTER_X2,     /* Filtering. */
                   Adafruit_BMP280::STANDBY_MS_1); /* Standby time. */
   Serial.println("BMP280 found and started");
@@ -379,6 +408,10 @@ void loop()
     second = gps.time.second();
     time_is_set == true;
   }
+  
+  // Checks if Cansat has landed
+  check_if_landed();
+  
   // Get time since turned on in miliseconds
   currentMillis = millis();
   
@@ -387,40 +420,18 @@ void loop()
   {
     previousMillis = currentMillis;
 
-    // If SCD30 has data ready, get the data
+    // If sensor board is on, get data from sensors
     if (digitalRead(sensor_board_power) == HIGH)
     {
+      // If SCD30 has data ready, get the data
       if (scd.dataAvailable())
       {
         co2 = scd.getCO2();
         temp_scd30 = scd.getTemperature();
         humidity_scd30 = scd.getHumidity();
       }
-    }
-
-    // Get data from BMP280 sensor
-    temp_bmp = bmp.readTemperature();
-    pressure = bmp.readPressure();
-    altitude = bmp.readAltitude(ambient_pressure);
-
-    // Get temperature from NTC thermoresistor
-    ntc_analog_value = (VCC / analog_steps) * analogRead(A10); // Analog reading from NTC
-    voltage_diff = VCC - ntc_analog_value;
-    ntc_resistance = ntc_analog_value / (voltage_diff / resistance_def); // Calculates the resistance of the sensor
-    ln_value = log(ntc_resistance / resistance_def);                     // Calculates natural log value
-    temp_thermo = (1 / ((ln_value / constant_B) + (1 / t_25_kelvin)));   // Temperature from sensor in kelvin
-    temp_thermo = temp_thermo - 273.15 + 17.4;                           // Converts to celsius with correction offset
-
-    // Sets SGP30 humidity from SCD30 humidity measurment, to get the most accurate readings
-    sgp.setHumidity(getAbsoluteHumidity(temp_thermo, humidity_scd30));
-    // Gets readings from SGP30
-    sgp.IAQmeasure();
-    tvoc = sgp.TVOC;
-    eco2 = sgp.eCO2;
-
-    // Gets all readings from PMSA003I
-    if (digitalRead(sensor_board_power) == HIGH)
-    {
+      
+      // Gets all readings from PMSA003I
       pms.read(&pms_data);
       pm10_std = pms_data.pm10_standard;
       pm25_std = pms_data.pm25_standard;
@@ -431,7 +442,33 @@ void loop()
       p25 = pms_data.particles_25um;
       p50 = pms_data.particles_50um;
       p100 = pms_data.particles_100um;
+      
+      // Sets SGP30 humidity from SCD30 humidity measurment, to get the most accurate readings
+      sgp.setHumidity(getAbsoluteHumidity(temp_thermo, humidity_scd30));
+      // Gets readings from SGP30
+      sgp.IAQmeasure();
+      tvoc = sgp.TVOC;
+      eco2 = sgp.eCO2;
     }
+
+    // Get data from BMP280 sensor
+    temp_bmp = bmp.readTemperature();
+    pressure = bmp.readPressure();
+    altitude = bmp.readAltitude(ambient_pressure);
+    // If higher altitude has been recorded, save it and get time when it happened
+    if (altitude > highest_altitude)
+    {
+      highest_altitude = altitude;
+      highest_alt_time = millis();
+    }
+
+    // Get temperature from NTC thermoresistor
+    ntc_analog_value = (VCC / analog_steps) * analogRead(A10); // Analog reading from NTC
+    voltage_diff = VCC - ntc_analog_value;
+    ntc_resistance = ntc_analog_value / (voltage_diff / resistance_def); // Calculates the resistance of the sensor
+    ln_value = log(ntc_resistance / resistance_def);                     // Calculates natural log value
+    temp_thermo = (1 / ((ln_value / constant_B) + (1 / t_25_kelvin)));   // Temperature from sensor in kelvin
+    temp_thermo = temp_thermo - 273.15 + 17.4;                           // Converts to celsius with correction offset
 
     // Get data from MICS2714 sensor
     if (digitalRead(mics_power) == HIGH)
@@ -447,7 +484,7 @@ void loop()
       // Calculates no2 concentration in ppm, using graph from datasheet
       no2_ppm = ((5 - mics_voltage) / mics_voltage) / 6.667;
     }
-
+    
     // Sends data to LoRa radio module
     LoRa.beginPacket();
     LoRa.print(hour);
@@ -488,7 +525,7 @@ void loop()
     LoRa.print(",");
     LoRa.print(no2_ppm);
     LoRa.print(",");
-    LoRa.println(analogRead(mics_input));
+    LoRa.print(analogRead(mics_input));
     LoRa.endPacket();
   
     // Print all data to the serial console
