@@ -11,7 +11,9 @@
 #include <TeensyThreads.h>
 #include <TinyGPSPlus.h>
 #include <SD.h>
-#include <Time.h>
+#include <Entropy.h>
+#include <TimeLib.h>
+#include <DS1307RTC.h>
 
 /* ---------------- Lora ----------------- */
 // LoRa pins
@@ -44,6 +46,7 @@ const int sensor_board_power = 22;
 // Mics2714 variables
 const int mics_input = 21;
 const int mics_power = 20;
+double mics_voltage = 0.0;
 float no2_ppm;
 
 // SGP30 object
@@ -87,14 +90,14 @@ float pressure = 0;
 float altitude = 0;
 float highest_altitude = 0;
 unsigned long highest_alt_time = 0;
-const float ambient_pressure = 1022.6;
+const float ambient_pressure = 1010.3;
 
 /* ----------------------- Time ----------------------------- */
 // Time zone offset
 const int offset = 3;
 
 // Variables to store time
-int hour, minute, second;
+tmElements_t tm;
 
 // Variable to check if correct time has been set to internal clock from GPS
 bool time_is_set = false;
@@ -150,7 +153,7 @@ void turn_on_all_sensors()
   }
   Serial.println("SCD30 started");
   LoRa.beginPacket();
-  LoRa.print("SCD30 started");
+  LoRa.println("SCD30 started");
   LoRa.endPacket();
 
   // Begin communication with PMSA003I sensor
@@ -161,7 +164,7 @@ void turn_on_all_sensors()
   }
   Serial.println("PMS started");
   LoRa.beginPacket();
-  LoRa.print("PMS started");
+  LoRa.println("PMS started");
   LoRa.endPacket();
 
   // Begin communication with SGP30 sensor
@@ -171,7 +174,7 @@ void turn_on_all_sensors()
     delay(100);
   }
   LoRa.beginPacket();
-  LoRa.print("SGP started");
+  LoRa.println("SGP started");
   LoRa.endPacket();
   // Loads sensor's baseline from EEPROM
   /*
@@ -187,23 +190,25 @@ void turn_on_all_sensors()
   digitalWrite(mics_power, LOW);
   Serial.println("Mics-2714 turned on");
   LoRa.beginPacket();
-  LoRa.print("MICS started");
+  LoRa.println("MICS started");
   LoRa.endPacket();
 
   // Begin communication with the GPS module
   Serial1.begin(9600);
+  /*
   // Send configuration data in UBX protocol
   for (unsigned int i = 0; i < sizeof(UBLOX_INIT); i++)
   {
     Serial1.write(pgm_read_byte(UBLOX_INIT + i));
   }
+  */
   LoRa.beginPacket();
-  LoRa.print("GPS started");
+  LoRa.println("GPS started");
   LoRa.endPacket();
 
   Serial.println("GPS, SCD30, PMSA003I, Mics-2714 and SGP30 sensors are working!");
   LoRa.beginPacket();
-  LoRa.print("GPS, SCD30, PMSA003I, Mics-2714 and SGP30 sensors are working!");
+  LoRa.println("GPS, SCD30, PMSA003I, Mics-2714 and SGP30 sensors are working!");
   LoRa.endPacket();
 }
 
@@ -212,9 +217,9 @@ void turn_off_all_sensors()
 {
   digitalWrite(sensor_board_power, LOW);
   digitalWrite(mics_power, HIGH);
-  Serial.println("Sensors and gps turned off!")
+  Serial.println("Sensors and gps turned off!");
   LoRa.beginPacket();
-  LoRa.print("Sensors and gps turned off!");
+  LoRa.println("Sensors and gps turned off!");
   LoRa.endPacket();
 }
 
@@ -222,11 +227,11 @@ void write_to_sd()
 {
   String dataString = "";
 
-  dataString += String(hour);
+  dataString += String(tm.Hour);
   dataString += String(":");
-  dataString += String(minute);
+  dataString += String(tm.Minute);
   dataString += String(":");
-  dataString += String(second);
+  dataString += String(tm.Second);
   dataString += String(",");
   dataString += String(gps.location.lat());
   dataString += String(",");
@@ -261,7 +266,7 @@ void write_to_sd()
   dataString += String(no2_ppm);
 
   // Opens a file
-  File myFile = SD.open(file_name, FILE_WRITE);
+  File myFile = SD.open(file_name.c_str(), FILE_WRITE);
 
   // if the file is available, write to it:
   if (myFile) {
@@ -277,11 +282,11 @@ void write_to_sd()
 void write_sd_log_header()
 {
   String header = "";
-  header = "Time,Lattitude,Longitude,GPSAltitude,Satellites,AltitudeBMP,TempBMP,TempThermoresistor,TempSCD,Humidity,eCO2,TVOC,PM10,PM25,PM100,CO2,NO2"
-  File myFile = SD.open(file_name, FILE_WRITE);
+  header = "Time,Lattitude,Longitude,GPSAltitude,Satellites,AltitudeBMP,TempBMP,TempThermoresistor,TempSCD,Humidity,eCO2,TVOC,PM10,PM25,PM100,CO2,NO2";
+  File myFile = SD.open(file_name.c_str(), FILE_WRITE);
   // if the file is available, write to it:
   if (myFile) {
-    myFile.println(dataString);
+    myFile.println(header);
     myFile.close();
   }
   // if the file isn't open, pop up an error:
@@ -293,7 +298,7 @@ void write_sd_log_header()
 // Beeps and sends location, when Cansat has landed
 void recovery_mode()
 {
-  while true
+  while (true)
   {
     // Beep
     digitalWrite(beeper_power, HIGH);
@@ -303,7 +308,7 @@ void recovery_mode()
     LoRa.beginPacket();
     LoRa.print(gps.location.lat(), 6);
     LoRa.print(",");
-    LoRa.print(gps.location.lng(), 6);
+    LoRa.println(gps.location.lng(), 6);
     LoRa.endPacket();
     delay(5000);
   }
@@ -317,7 +322,7 @@ void check_if_landed()
   // Cansat must have landed and stayed still
   if (highest_altitude > 400 && altitude < 200 && millis() - highest_alt_time > 300000)
   {
-    recovery_mode()
+    recovery_mode();
   }
 }
 
@@ -333,6 +338,8 @@ void setup()
   // At the start set mics to off
   digitalWrite(mics_power, HIGH);
 
+  // Start random number generator
+  Entropy.Initialize();
   // Begin serial and i2c comunication.
   Serial.begin(9600);
   Serial.println("Starting CanSat");
@@ -368,15 +375,15 @@ void setup()
   while (!SD.begin(BUILTIN_SDCARD)) {
     Serial.println("Initializing SD card failed! Trying again!");
     LoRa.beginPacket();
-    LoRa.print("Initializing SD card failed! Trying again!");
+    LoRa.println("Initializing SD card failed! Trying again!");
     LoRa.endPacket();
     delay(1000);
   }
-  file_name = "datalog" + String(random(1, 1000)) + ".csv";
+  file_name = "datalog" + String(Entropy.random(10000)) + ".csv";
   write_sd_log_header();
   Serial.println("SD card initialized!");
   LoRa.beginPacket();
-  LoRa.print("SD card initialized!");
+  LoRa.println("SD card initialized!");
   LoRa.endPacket();
   
   // Starts BMP280 sensor
@@ -401,12 +408,20 @@ void loop()
   // Check if new GPS data is available
   get_gps_data();
   
-  if (gps.time.isValid()/* && !time_is_set*/)
+  if (gps.time.isValid() && !time_is_set)
   {
-    hour = gps.time.hour();
-    minute = gps.time.minute();
-    second = gps.time.second();
+    tm.Hour = gps.time.hour() + offset;
+    tm.Minute = gps.time.minute();
+    tm.Second = gps.time.second();
+    tm.Day = gps.date.day();
+    tm.Month = gps.date.month();
+    tm.Year = gps.date.year();
+    RTC.write(tm);
     time_is_set == true;
+  }
+  if (time_is_set)
+  {
+    RTC.read(tm);
   }
   
   // Checks if Cansat has landed
@@ -471,27 +486,21 @@ void loop()
     temp_thermo = temp_thermo - 273.15 + 17.4;                           // Converts to celsius with correction offset
 
     // Get data from MICS2714 sensor
-    if (digitalRead(mics_power) == HIGH)
+    if (digitalRead(mics_power) == LOW)
     {
-      // Gets average voltage from mics input
-      float mics_voltage = 0.0;
-      int samples = 5;
-      for (int i = 0; i < samples; i++)
-      {
-        mics_voltage += (analogRead(mics_input) / analog_steps) * 3.3;
-      }
-      mics_voltage = mics_voltage / samples;
+      // Gets voltage from mics input
+      mics_voltage = (analogRead(mics_input) * 3.3) / analog_steps;
       // Calculates no2 concentration in ppm, using graph from datasheet
-      no2_ppm = ((5 - mics_voltage) / mics_voltage) / 6.667;
-    }
+      no2_ppm = ((3.3 - mics_voltage) / mics_voltage) / 6.667;
+      }
     
     // Sends data to LoRa radio module
     LoRa.beginPacket();
-    LoRa.print(hour);
+    LoRa.print(tm.Hour);
     LoRa.print(":");
-    LoRa.print(minute);
+    LoRa.print(tm.Minute);
     LoRa.print(":");
-    LoRa.print(second);
+    LoRa.print(tm.Second);
     LoRa.print(",");
     LoRa.print(gps.location.lat(), 6);
     LoRa.print(",");
@@ -523,17 +532,15 @@ void loop()
     LoRa.print(",");
     LoRa.print(co2);
     LoRa.print(",");
-    LoRa.print(no2_ppm);
-    LoRa.print(",");
-    LoRa.print(analogRead(mics_input));
+    LoRa.println(no2_ppm);
     LoRa.endPacket();
   
     // Print all data to the serial console
-    Serial.print(hour);
+    Serial.print(tm.Hour);
     Serial.print(":");
-    Serial.print(minute);
+    Serial.print(tm.Minute);
     Serial.print(":");
-    Serial.print(second);
+    Serial.print(tm.Second);
     Serial.print(",");
     Serial.print(gps.location.lat(), 6);
     Serial.print(",");
@@ -567,9 +574,7 @@ void loop()
     Serial.print(",");
     Serial.print(co2);
     Serial.print(",");
-    Serial.print(no2_ppm);
-    Serial.print(",");
-    Serial.println(analogRead(mics_input));
+    Serial.println(no2_ppm);
     
     // Write data to SD card log file
     write_to_sd();
