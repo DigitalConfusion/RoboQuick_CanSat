@@ -27,7 +27,7 @@ const long freq = 4337E5; // 433.7 MHz
 
 /* ----------------- GPS ------------------*/
 // Gps object
-TinyGPSPlus gps;
+volatile TinyGPSPlus gps;
 
 // Configuration for GPS to update at 5 times a second
 const unsigned char UBLOX_INIT[] PROGMEM = {
@@ -93,9 +93,6 @@ unsigned long highest_alt_time = 0;
 const float ambient_pressure = 1010.3;
 
 /* ----------------------- Time ----------------------------- */
-// Time zone offset
-const int offset = 3;
-
 // Variables to store time
 tmElements_t tm;
 
@@ -115,6 +112,9 @@ int analog_steps;
 // Beeper power pin
 const int beeper_power = 30; // Change this to correct pin!!!!
 
+IntervalTimer myTimer;
+volatile bool timer_running = false;
+
 /* ---------------------- Functions  -------------------------*/
 // Converts relative humidity to absolute humidity
 uint32_t getAbsoluteHumidity(float temperature, float humidity)
@@ -128,13 +128,10 @@ uint32_t getAbsoluteHumidity(float temperature, float humidity)
 // Function that updates gps data
 void get_gps_data()
 {
-  if (digitalRead(sensor_board_power) == HIGH)
-  {
     while (Serial1.available())
     {
       gps.encode(Serial1.read());
     }
-  }
 }
 
 // Function that turns on and begins communication with all senors
@@ -366,7 +363,8 @@ void setup()
   // Settings for LoRa
   LoRa.setTxPower(20);
   LoRa.setSpreadingFactor(10);
-  // LoRa.setSignalBandwidth(62.5E3);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(8);
   // LoRa.enableCrc();
   // LoRa.setGain(6);
   Serial.println("LoRa started");
@@ -405,12 +403,20 @@ void setup()
 /*------------------- Loop -------------------------*/
 void loop()
 {
-  // Check if new GPS data is available
-  get_gps_data();
+  if (digitalRead(sensor_board_power) == HIGH && !timer_running)
+  {
+    myTimer.begin(get_gps_data, 100000);
+    timer_running = true;
+  }
+  else if (digitalRead(sensor_board_power) == LOW && timer_running)
+  {
+    myTimer.end();
+    timer_running = false;
+  }
   
   if (gps.time.isValid() && !time_is_set)
   {
-    tm.Hour = gps.time.hour() + offset;
+    tm.Hour = gps.time.hour() + 3;
     tm.Minute = gps.time.minute();
     tm.Second = gps.time.second();
     tm.Day = gps.date.day();
@@ -493,11 +499,12 @@ void loop()
       // Calculates no2 concentration in ppm, using graph from datasheet
       no2_ppm = ((3.3 - mics_voltage) / mics_voltage) / 6.667;
       }
-    
+
+    //noInterrupts();
     // Sends data to LoRa radio module
     LoRa.beginPacket();
-    LoRa.print(tm.Hour);
-    LoRa.print(":");
+    //LoRa.print(tm.Hour);
+    //LoRa.print(":");
     LoRa.print(tm.Minute);
     LoRa.print(":");
     LoRa.print(tm.Second);
@@ -506,9 +513,11 @@ void loop()
     LoRa.print(",");
     LoRa.print(gps.location.lng(), 6);
     LoRa.print(",");
-    LoRa.print(gps.altitude.meters());
-    LoRa.print(",");
-    LoRa.print(gps.satellites.value());
+    //LoRa.print(gps.altitude.meters());
+    //LoRa.print(",");
+    LoRa.print(gps.speed.kmph());
+    //LoRa.print(",");
+    //LoRa.print(gps.course.deg());
     LoRa.print(",");
     LoRa.print(altitude);
     LoRa.print(",");
@@ -519,6 +528,7 @@ void loop()
     LoRa.print(temp_scd30);
     LoRa.print(",");
     LoRa.print(humidity_scd30);
+    /*
     LoRa.print(",");
     LoRa.print(eco2);
     LoRa.print(",");
@@ -533,8 +543,9 @@ void loop()
     LoRa.print(co2);
     LoRa.print(",");
     LoRa.println(no2_ppm);
+    */
     LoRa.endPacket();
-  
+    
     // Print all data to the serial console
     Serial.print(tm.Hour);
     Serial.print(":");
@@ -578,5 +589,7 @@ void loop()
     
     // Write data to SD card log file
     write_to_sd();
+    
+    //interrupts();
   }
 }
